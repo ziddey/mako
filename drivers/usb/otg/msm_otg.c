@@ -691,8 +691,7 @@ static int msm_otg_set_suspend(struct usb_phy *phy, int suspend)
 {
 	struct msm_otg *motg = container_of(phy, struct msm_otg, phy);
 
-	// simulate aca since using ID_A for host mode -ziddey
-	//if (aca_enabled())
+	if (aca_enabled())
 		return 0;
 
 	if (atomic_read(&motg->in_lpm) == suspend)
@@ -1212,8 +1211,7 @@ static int msm_otg_usbdev_notify(struct notifier_block *self,
 
 	switch (action) {
 	case USB_DEVICE_ADD:
-		// simulate aca since using ID_A for host mode -ziddey
-		//if (aca_enabled())
+		if (aca_enabled())
 			usb_disable_autosuspend(udev);
 		if (otg->phy->state == OTG_STATE_A_WAIT_BCON) {
 			pr_debug("B_CONN set\n");
@@ -1568,6 +1566,11 @@ static bool msm_chg_aca_detect(struct msm_otg *motg)
 		goto out;
 
 	int_sts = ulpi_read(phy, 0x87);
+
+        // debug -ziddey
+/*        pr_debug("*** int_sts = %x ***\n", int_sts);
+        pr_debug("*** int_sts & 0x1C = %x ***\n", int_sts & 0x1C);*/
+
 	switch (int_sts & 0x1C) {
 	case 0x08:
 		if (!test_and_set_bit(ID_A, &motg->inputs)) {
@@ -1614,7 +1617,22 @@ static bool msm_chg_aca_detect(struct msm_otg *motg)
 		}
 		break;
 	default:
-		ret = test_and_clear_bit(ID_A, &motg->inputs) |
+		// simulate ID_A to force host mode with charging -ziddey
+		if (motg->chg_type == USB_PROPRIETARY_CHARGER) {
+			pr_info("*** FORCING USB HOST MODE WITH CHARGING ***\n");
+	                set_bit(ID_A, &motg->inputs);
+       	                dev_dbg(phy->dev, "ID_A\n");
+               	        motg->chg_type = USB_ACA_A_CHARGER;
+                       	motg->chg_state = USB_CHG_STATE_DETECTED;
+                        clear_bit(ID_B, &motg->inputs);
+       	                clear_bit(ID_C, &motg->inputs);
+               	        set_bit(ID, &motg->inputs);
+                       	ret = true;
+                }
+		else ret = false;
+
+		// actual ACA not functional anyway -ziddey
+/*		ret = test_and_clear_bit(ID_A, &motg->inputs) |
 			test_and_clear_bit(ID_B, &motg->inputs) |
 			test_and_clear_bit(ID_C, &motg->inputs) |
 			!test_and_set_bit(ID, &motg->inputs);
@@ -1622,7 +1640,7 @@ static bool msm_chg_aca_detect(struct msm_otg *motg)
 			dev_dbg(phy->dev, "ID A/B/C/GND is no more\n");
 			motg->chg_type = USB_INVALID_CHARGER;
 			motg->chg_state = USB_CHG_STATE_UNDEFINED;
-		}
+		}*/
 	}
 out:
 	return ret;
@@ -2120,16 +2138,9 @@ static void msm_chg_detect_work(struct work_struct *w)
 				break;
 			}
 
-			if (line_state) /* DP > VLGC or/and DM > VLGC */ {
-				if (!vout && dm_vlgc) // case1 actual proprietary charger detected -ziddey
-					motg->chg_type = USB_PROPRIETARY_CHARGER;
-				else {
-					// simulate ID_A to force host mode with charging -ziddey
-					pr_info("***FORCING USB HOST MODE WITH CHARGING - SET ID_A***\n");
-					set_bit(ID_A, &motg->inputs);
-					motg->chg_type = USB_ACA_A_CHARGER;
-				}
-			}
+			if (line_state) /* DP > VLGC or/and DM > VLGC */
+//				if (!vout && dm_vlgc) // case1 actual proprietary charger detected -ziddey
+				motg->chg_type = USB_PROPRIETARY_CHARGER;
 			else
 				motg->chg_type = USB_SDP_CHARGER;
 
@@ -2609,8 +2620,7 @@ static void msm_otg_sm_work(struct work_struct *w)
 			 * attached to ACA: Use IDCHG_MAX for charging
 			 */
 			if (test_bit(ID_A, &motg->inputs))
-//				msm_otg_notify_charger(motg, IDEV_CHG_MIN); typo? -ziddey
-				msm_otg_notify_charger(motg, IDEV_CHG_MAX);
+				msm_otg_notify_charger(motg, IDEV_CHG_MAX); // was IDEV_CHG_MIN. typo? -ziddey
 			else
 				msm_hsusb_vbus_power(motg, 0);
 			otg->phy->state = OTG_STATE_A_WAIT_VFALL;
@@ -2931,13 +2941,14 @@ static irqreturn_t msm_otg_irq(int irq, void *data)
 			break;
 		case OTG_STATE_A_WAIT_BCON:
 	                // disable host mode (case2 actual proprietary charger detected) -ziddey
-        	        if (pc == 0x80001805) {
+/*        	        if (pc == 0x80001805) {
                 	        pr_info("*** UNFORCING HOST MODE - PROPRIETARY CHARGER DETECTED ***\n");
                         	clear_bit(ID_A, &motg->inputs);
 				motg->chg_type = USB_PROPRIETARY_CHARGER;
 				break;
 	                }
-			else if (TA_WAIT_BCON < 0)
+			else*/
+			if (TA_WAIT_BCON < 0)
 				set_bit(A_BUS_REQ, &motg->inputs);
 		default:
 			work = 0;
@@ -3008,7 +3019,7 @@ static void msm_otg_set_vbus_state(int online)
 
 		// disable host mode (if enabled) -ziddey
 		if (test_and_clear_bit(ID_A, &motg->inputs)) {
-			pr_info("***UNFORCING USB HOST MODE WITH CHARGING - CLEAR ID_A***\n");
+			pr_info("*** UNFORCING USB HOST MODE WITH CHARGING ***\n");
 			motg->chg_state = USB_CHG_STATE_UNDEFINED;
                         motg->chg_type = USB_INVALID_CHARGER;
 		}
@@ -3136,7 +3147,7 @@ static ssize_t msm_otg_mode_write(struct file *file, const char __user *ubuf,
 		goto out;
 	}
 
-	// always force req_mode -ziddey
+	// always force req_mode. clear ID_A -ziddey
 	switch (req_mode) {
 	case USB_NONE:
 		/*switch (phy->state) {
@@ -3144,7 +3155,6 @@ static ssize_t msm_otg_mode_write(struct file *file, const char __user *ubuf,
 		case OTG_STATE_B_PERIPHERAL:*/
 			set_bit(ID, &motg->inputs);
 			clear_bit(B_SESS_VLD, &motg->inputs);
-			// also clear ID_A -ziddey
 			clear_bit(ID_A, &motg->inputs);
 			/*break;
 		default:
@@ -3157,7 +3167,6 @@ static ssize_t msm_otg_mode_write(struct file *file, const char __user *ubuf,
 		case OTG_STATE_A_HOST:*/
 			set_bit(ID, &motg->inputs);
 			set_bit(B_SESS_VLD, &motg->inputs);
-			// also clear ID_A -ziddey
 			clear_bit(ID_A, &motg->inputs);
 			/*break;
 		default:
@@ -3169,7 +3178,6 @@ static ssize_t msm_otg_mode_write(struct file *file, const char __user *ubuf,
 		case OTG_STATE_B_IDLE:
 		case OTG_STATE_B_PERIPHERAL:*/
 			clear_bit(ID, &motg->inputs);
-			// also clear ID_A -ziddey
 			clear_bit(ID_A, &motg->inputs);
 			/*break;
 		default:
@@ -3558,6 +3566,13 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 	motg->pdata = pdata;
 	phy = &motg->phy;
 	phy->dev = &pdev->dev;
+
+	/*
+	 * By enabling debug_aca instead of aca, it (automatic host mode) can
+	 * be disabled. This allows use of actual proprietary chargers.
+	 * -ziddey
+	 */
+	debug_aca_enabled = true;
 
 	/*
 	 * ACA ID_GND threshold range is overlapped with OTG ID_FLOAT.  Hence
