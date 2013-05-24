@@ -1098,7 +1098,7 @@ static void msm_otg_notify_charger(struct msm_otg *motg, unsigned mA)
 	if (g && g->is_a_peripheral)
 		return;
 
-	// force fast charge in host mode -ziddey
+	// remove charge limit (500mA) in host mode -ziddey
 	/*if ((motg->chg_type == USB_ACA_DOCK_CHARGER ||
 		motg->chg_type == USB_ACA_A_CHARGER ||
 		motg->chg_type == USB_ACA_B_CHARGER ||
@@ -1566,11 +1566,6 @@ static bool msm_chg_aca_detect(struct msm_otg *motg)
 		goto out;
 
 	int_sts = ulpi_read(phy, 0x87);
-
-        // debug -ziddey
-/*        pr_debug("*** int_sts = %x ***\n", int_sts);
-        pr_debug("*** int_sts & 0x1C = %x ***\n", int_sts & 0x1C);*/
-
 	switch (int_sts & 0x1C) {
 	case 0x08:
 		if (!test_and_set_bit(ID_A, &motg->inputs)) {
@@ -1618,9 +1613,9 @@ static bool msm_chg_aca_detect(struct msm_otg *motg)
 		break;
 	default:
 		// simulate ID_A to force host mode with charging -ziddey
-		if (motg->chg_type == USB_PROPRIETARY_CHARGER) {
+		if (motg->chg_type == USB_PROPRIETARY_CHARGER &&
+			!test_and_set_bit(ID_A, &motg->inputs)) {
 			pr_info("*** FORCING USB HOST MODE WITH CHARGING ***\n");
-	                set_bit(ID_A, &motg->inputs);
        	                dev_dbg(phy->dev, "ID_A\n");
                	        motg->chg_type = USB_ACA_A_CHARGER;
                        	motg->chg_state = USB_CHG_STATE_DETECTED;
@@ -1629,10 +1624,8 @@ static bool msm_chg_aca_detect(struct msm_otg *motg)
                	        set_bit(ID, &motg->inputs);
                        	ret = true;
                 }
-		else ret = false;
-
-		// actual ACA not functional anyway -ziddey
-/*		ret = test_and_clear_bit(ID_A, &motg->inputs) |
+		else ret = false; // actual ACA not functional anyway -ziddey
+		/*ret = test_and_clear_bit(ID_A, &motg->inputs) |
 			test_and_clear_bit(ID_B, &motg->inputs) |
 			test_and_clear_bit(ID_C, &motg->inputs) |
 			!test_and_set_bit(ID, &motg->inputs);
@@ -1825,7 +1818,6 @@ static bool msm_chg_check_primary_det(struct msm_otg *motg)
 		break;
 	case SNPS_28NM_INTEGRATED_PHY:
 		chg_det = ulpi_read(phy, 0x87);
-		pr_debug("*** chg_det = %x ***\n", chg_det); // debug -ziddey
 		ret = chg_det & 1;
 		/* Turn off VDP_SRC */
 		ulpi_write(phy, 0x3, 0x86);
@@ -2107,13 +2099,6 @@ static void msm_chg_detect_work(struct work_struct *w)
 		vout = msm_chg_check_primary_det(motg);
 		line_state = readl_relaxed(USB_PORTSC) & PORTSC_LS;
 		dm_vlgc = line_state & PORTSC_LS_DM;
-
-		// debug -ziddey
-		if (vout) pr_debug("*** vout ***\n");
-		pr_debug("*** portsc = %x ***\n", readl_relaxed(USB_PORTSC));
-		pr_debug("*** line_state = %x ***\n", line_state);
-		pr_debug("*** dm_vlgc = %x ***\n", dm_vlgc);
-
 		if (vout && !dm_vlgc) { /* VDAT_REF < DM < VLGC */
 			if (test_bit(ID_A, &motg->inputs)) {
 				motg->chg_type = USB_ACA_DOCK_CHARGER;
@@ -2139,7 +2124,6 @@ static void msm_chg_detect_work(struct work_struct *w)
 			}
 
 			if (line_state) /* DP > VLGC or/and DM > VLGC */
-//				if (!vout && dm_vlgc) // case1 actual proprietary charger detected -ziddey
 				motg->chg_type = USB_PROPRIETARY_CHARGER;
 			else
 				motg->chg_type = USB_SDP_CHARGER;
@@ -2551,7 +2535,8 @@ static void msm_otg_sm_work(struct work_struct *w)
 			usleep_range(10000, 12000);
 			/* ACA: ID_A: Stop charging untill enumeration */
 			if (test_bit(ID_A, &motg->inputs))
-				msm_otg_notify_charger(motg, 0);
+				// start charging (compatibility with proprietary chargers) -ziddey
+				msm_otg_notify_charger(motg, IDEV_ACA_CHG_MAX); // originally 0
 			else
 				msm_hsusb_vbus_power(motg, 1);
 			msm_otg_start_timer(motg, TA_WAIT_VRISE, A_WAIT_VRISE);
@@ -2620,7 +2605,7 @@ static void msm_otg_sm_work(struct work_struct *w)
 			 * attached to ACA: Use IDCHG_MAX for charging
 			 */
 			if (test_bit(ID_A, &motg->inputs))
-				msm_otg_notify_charger(motg, IDEV_CHG_MAX); // was IDEV_CHG_MIN. typo? -ziddey
+				msm_otg_notify_charger(motg, IDEV_CHG_MIN);
 			else
 				msm_hsusb_vbus_power(motg, 0);
 			otg->phy->state = OTG_STATE_A_WAIT_VFALL;
@@ -2899,14 +2884,12 @@ static irqreturn_t msm_otg_irq(int irq, void *data)
 	} else if (usbsts & STS_PCI) {
 		pc = readl_relaxed(USB_PORTSC);
 		pr_debug("portsc = %x\n", pc);
-
 		ret = IRQ_NONE;
 		/*
 		 * HCD Acks PCI interrupt. We use this to switch
 		 * between different OTG states.
 		 */
 		work = 1;
-
 		switch (otg->phy->state) {
 		case OTG_STATE_A_SUSPEND:
 			if (otg->host->b_hnp_enable && (pc & PORTSC_CSC) &&
@@ -2940,14 +2923,6 @@ static irqreturn_t msm_otg_irq(int irq, void *data)
 			}
 			break;
 		case OTG_STATE_A_WAIT_BCON:
-	                // disable host mode (case2 actual proprietary charger detected) -ziddey
-/*        	        if (pc == 0x80001805) {
-                	        pr_info("*** UNFORCING HOST MODE - PROPRIETARY CHARGER DETECTED ***\n");
-                        	clear_bit(ID_A, &motg->inputs);
-				motg->chg_type = USB_PROPRIETARY_CHARGER;
-				break;
-	                }
-			else*/
 			if (TA_WAIT_BCON < 0)
 				set_bit(A_BUS_REQ, &motg->inputs);
 		default:
@@ -3020,6 +2995,7 @@ static void msm_otg_set_vbus_state(int online)
 		// disable host mode (if enabled) -ziddey
 		if (test_and_clear_bit(ID_A, &motg->inputs)) {
 			pr_info("*** UNFORCING USB HOST MODE WITH CHARGING ***\n");
+			dev_dbg(phy->dev, "ID A/B/C/GND is no more\n");
 			motg->chg_state = USB_CHG_STATE_UNDEFINED;
                         motg->chg_type = USB_INVALID_CHARGER;
 		}
@@ -3569,8 +3545,7 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 
 	/*
 	 * By enabling debug_aca instead of aca, it (automatic host mode) can
-	 * be disabled. This allows use of actual proprietary chargers.
-	 * -ziddey
+	 * be disabled. -ziddey
 	 */
 	debug_aca_enabled = true;
 
