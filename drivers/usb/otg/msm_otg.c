@@ -1613,16 +1613,16 @@ static bool msm_chg_aca_detect(struct msm_otg *motg)
 		break;
 	default:
 		// simulate ID_A to force host mode with charging -ziddey
-		if (motg->chg_type == USB_PROPRIETARY_CHARGER &&
-			!test_and_set_bit(ID_A, &motg->inputs)) {
+		if (motg->chg_type == USB_PROPRIETARY_CHARGER) {
 			pr_info("*** FORCING USB HOST MODE WITH CHARGING ***\n");
+			set_bit(ID_A, &motg->inputs);
        	                dev_dbg(phy->dev, "ID_A\n");
-               	        motg->chg_type = USB_ACA_A_CHARGER;
-                       	motg->chg_state = USB_CHG_STATE_DETECTED;
-                        clear_bit(ID_B, &motg->inputs);
+       	       	        motg->chg_type = USB_ACA_A_CHARGER;
+               	       	motg->chg_state = USB_CHG_STATE_DETECTED;
+                       	clear_bit(ID_B, &motg->inputs);
        	                clear_bit(ID_C, &motg->inputs);
-               	        set_bit(ID, &motg->inputs);
-                       	ret = true;
+       	       	        set_bit(ID, &motg->inputs);
+               	       	ret = true;
                 }
 		else ret = false; // actual ACA not functional anyway -ziddey
 		/*ret = test_and_clear_bit(ID_A, &motg->inputs) |
@@ -2978,7 +2978,8 @@ static void msm_otg_set_vbus_state(int online)
 {
 	static bool init;
 	struct msm_otg *motg = the_msm_otg;
-	struct usb_otg *otg = motg->phy.otg;
+	//struct usb_otg *otg = motg->phy.otg;
+	struct usb_phy *phy = &motg->phy;
 
 	// need BSV interrupt in A Host Mode to detect cable unplug -ziddey
 	/* In A Host Mode, ignore received BSV interrupts */
@@ -3159,6 +3160,12 @@ static ssize_t msm_otg_mode_write(struct file *file, const char __user *ubuf,
 		default:
 			goto out;
 		}*/
+
+		// force usb device -ziddey-test
+		//writel(readl(USB_PORTSC) & ~PORTSC_PHCD, USB_PORTSC);
+		//writel_relaxed(0x88001205, USB_PORTSC);
+		pr_debug("portsc = %x", readl_relaxed(USB_PORTSC));
+
 		break;
 	default:
 		goto out;
