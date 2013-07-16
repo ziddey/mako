@@ -1613,7 +1613,7 @@ static bool msm_chg_aca_detect(struct msm_otg *motg)
 		break;
 	default:
 		// simulate ID_A to force host mode with charging -ziddey
-		if (motg->chg_type == USB_PROPRIETARY_CHARGER) {
+		if (!test_bit(ID, &motg->inputs)) {
 			pr_info("*** FORCING USB HOST MODE WITH CHARGING ***\n");
 			set_bit(ID_A, &motg->inputs);
        	                dev_dbg(phy->dev, "ID_A\n");
@@ -2123,8 +2123,18 @@ static void msm_chg_detect_work(struct work_struct *w)
 				break;
 			}
 
-			if (line_state) /* DP > VLGC or/and DM > VLGC */
-				motg->chg_type = USB_PROPRIETARY_CHARGER;
+			if (line_state) /* DP > VLGC or/and DM > VLGC */ {
+				// simulate ID_GND to force host mode (without charging) -ziddey
+	                        pr_info("*** FORCING USB HOST MODE ***\n");
+        	                clear_bit(ID, &motg->inputs);
+               		        dev_dbg(phy->dev, "ID_GND\n");
+	                        motg->chg_type = USB_INVALID_CHARGER;
+				//motg->chg_state = USB_CHG_STATE_UNDEFINED;
+	                        clear_bit(ID_A, &motg->inputs);
+        	                clear_bit(ID_B, &motg->inputs);
+                	        clear_bit(ID_C, &motg->inputs);
+	                }
+				//motg->chg_type = USB_PROPRIETARY_CHARGER;
 			else
 				motg->chg_type = USB_SDP_CHARGER;
 
@@ -2994,8 +3004,8 @@ static void msm_otg_set_vbus_state(int online)
 		clear_bit(B_SESS_VLD, &motg->inputs);
 
 		// disable host mode (if enabled) -ziddey
-		if (test_and_clear_bit(ID_A, &motg->inputs)) {
-			pr_info("*** UNFORCING USB HOST MODE WITH CHARGING ***\n");
+		if (test_and_clear_bit(ID_A, &motg->inputs) || !test_and_set_bit(ID, &motg->inputs)) {
+			pr_info("*** UNFORCING USB HOST MODE  ***\n");
 			dev_dbg(phy->dev, "ID A/B/C/GND is no more\n");
 			motg->chg_state = USB_CHG_STATE_UNDEFINED;
                         motg->chg_type = USB_INVALID_CHARGER;
@@ -3160,12 +3170,6 @@ static ssize_t msm_otg_mode_write(struct file *file, const char __user *ubuf,
 		default:
 			goto out;
 		}*/
-
-		// force usb device -ziddey-test
-		//writel(readl(USB_PORTSC) & ~PORTSC_PHCD, USB_PORTSC);
-		//writel_relaxed(0x88001205, USB_PORTSC);
-		pr_debug("portsc = %x", readl_relaxed(USB_PORTSC));
-
 		break;
 	default:
 		goto out;
